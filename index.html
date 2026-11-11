@@ -62,8 +62,7 @@ const OVAL=[];{const s=+Object.keys(ov)[0];let p=-1,c=s;do{OVAL.push(c);const n=
 async function init(){
   const fs=await FilesetResolver.forVisionTasks("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm");
   const base={modelAssetPath:"https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task"};
-  const mk=async(m,n)=>{try{return await FaceLandmarker.createFromOptions(fs,{baseOptions:{...base,delegate:"GPU"},runningMode:m,numFaces:n})}
-    catch{return await FaceLandmarker.createFromOptions(fs,{baseOptions:base,runningMode:m,numFaces:n})}};
+  const mk=(m,n)=>FaceLandmarker.createFromOptions(fs,{baseOptions:{...base,delegate:"CPU"},runningMode:m,numFaces:n,minFaceDetectionConfidence:.3,minFacePresenceConfidence:.3});
   lmImg=await mk("IMAGE",5); lmVid=await mk("VIDEO",3);
   st("IA pronta. Anexe o rosto e a foto/vídeo."); check();
 }
@@ -76,8 +75,9 @@ $("fFace").onchange=async e=>{
   const f=e.target.files[0];if(!f)return;
   const img=await loadImg(f);
   $("pFace").src=img.src;$("pFace").hidden=false;$("hFace").hidden=true;
-  faceImg=document.createElement("canvas");faceImg.width=img.naturalWidth;faceImg.height=img.naturalHeight;
-  faceImg.getContext("2d").drawImage(img,0,0);
+  const k=Math.min(1,1024/Math.max(img.naturalWidth,img.naturalHeight));
+  faceImg=document.createElement("canvas");faceImg.width=Math.round(img.naturalWidth*k);faceImg.height=Math.round(img.naturalHeight*k);
+  faceImg.getContext("2d").drawImage(img,0,0,faceImg.width,faceImg.height);
   srcPts=null;
   if(!lmImg){st("Aguarde a IA carregar…");return}
   const r=lmImg.detect(faceImg);
