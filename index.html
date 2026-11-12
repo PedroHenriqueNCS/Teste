@@ -42,7 +42,7 @@ button:disabled{opacity:.5}
 <div class="card"><h2>3. Resultado</h2>
 <div class="box"><canvas id="out" hidden></canvas><div class="hint" id="hOut">O resultado aparece aqui</div></div>
 <a class="dl" id="dl" hidden>Baixar resultado</a></div>
-<div class="note">Tudo roda no seu aparelho. Nada é enviado a servidores. · versão 6</div>
+<div class="note">Tudo roda no seu aparelho. Nada é enviado a servidores. · versão 7</div>
 
 <script type="module">
 const $=id=>document.getElementById(id), st=t=>$("st").textContent=t;
@@ -78,7 +78,7 @@ $("fFace").onchange=async e=>{
   const f=e.target.files[0];if(!f)return;
   const img=await loadImg(f);
   $("pFace").src=img.src;$("pFace").hidden=false;$("hFace").hidden=true;
-  const k=Math.min(1,1024/Math.max(img.naturalWidth,img.naturalHeight));
+  const k=Math.min(1,1600/Math.max(img.naturalWidth,img.naturalHeight));
   faceImg=document.createElement("canvas");faceImg.width=Math.round(img.naturalWidth*k);faceImg.height=Math.round(img.naturalHeight*k);
   faceImg.getContext("2d").drawImage(img,0,0,faceImg.width,faceImg.height);
   srcPts=null;
@@ -152,7 +152,10 @@ function colorMatch(ctx,x0,y0,w,h,L,t){
   const a=sc.getImageData(0,0,sw,sh).data;
   sc.clearRect(0,0,sw,sh);sc.drawImage(ctx.canvas,x0,y0,w,h,0,0,sw,sh);const b=sc.getImageData(0,0,sw,sh).data;
   const n=sw*sh*3,P=new Float32Array(n),Q=new Float32Array(n);
-  for(let i=0,j=0;i<a.length;i+=4,j+=3){const al=a[i+3]/255;for(let c=0;c<3;c++){P[j+c]=a[i+c]*al;Q[j+c]=b[i+c]*al}}
+  const skin=i=>{const R=b[i],Gn=b[i+1],B=b[i+2],Y=.299*R+.587*Gn+.114*B,Cb=128-.1687*R-.3313*Gn+.5*B,Cr=128+.5*R-.4187*Gn-.0813*B;return Y>45&&Cb>74&&Cb<130&&Cr>132&&Cr<178};
+  let tot=0,okc=0;for(let i=0;i<a.length;i+=4)if(a[i+3]>128){tot++;if(skin(i))okc++}
+  const useSkin=okc>tot*.2;
+  for(let i=0,j=0;i<a.length;i+=4,j+=3){const al=a[i+3]/255*((!useSkin||skin(i))?1:0);for(let c=0;c<3;c++){P[j+c]=a[i+c]*al;Q[j+c]=b[i+c]*al}}
   const Pb=Float32Array.from(P),Qb=Float32Array.from(Q);blur3(Pb,sw,sh,r);blur3(Qb,sw,sh,r);
   const G=new Float32Array(n),yP=new Float32Array(n),yQ=new Float32Array(n),W3=[.3,.59,.11];
   for(let j=0;j<n;j+=3){let sp=0,sq=0;
@@ -181,18 +184,22 @@ function swap(ctx,W,H,lm){
   const d=srcPts.map(([px,py],i)=>{const x=px-ax,y=py-ay,X=re*x-im*y+bx,Y=im*x+re*y+by;return[X*(1-A)+t[i][0]*A,Y*(1-A)+t[i][1]*A]});
   layer.width=mask.width=W;layer.height=mask.height=H;
   const lc=layer.getContext("2d",{willReadFrequently:true}),mc=mask.getContext("2d",{willReadFrequently:true});
-  lc.clearRect(0,0,W,H);
+  lc.imageSmoothingEnabled=true;lc.imageSmoothingQuality="high";lc.clearRect(0,0,W,H);
   for(const tr of TRIS)tri(lc,pyr[lv].c,pyr[lv].p,d,tr);
   let x0=W,y0=H,x1=0,y1=0;d.forEach(([x,y])=>{x0=Math.min(x0,x);y0=Math.min(y0,y);x1=Math.max(x1,x);y1=Math.max(y1,y)});
   x0=Math.max(0,x0|0);y0=Math.max(0,y0|0);x1=Math.min(W,x1+1|0);y1=Math.min(H,y1+1|0);
   const w=x1-x0,h=y1-y0;if(w<8||h<8)return;
   const L=lc.getImageData(x0,y0,w,h);colorMatch(ctx,x0,y0,w,h,L,t);
+  {const n0=w*h,P0=new Float32Array(n0*3),A0=new Float32Array(n0*3),r0=Math.max(1,Math.round(w/160)),up=Math.hypot(re,im)*2**lv,k=.4+.8*Math.max(0,Math.min(1,up-.8));
+   for(let i=0,j=0;i<n0;i++,j+=3){const a=L.data[i*4+3]/255;for(let c=0;c<3;c++){P0[j+c]=L.data[i*4+c]*a;A0[j+c]=a}}
+   blur3(P0,w,h,r0);blur3(A0,w,h,r0);
+   for(let i=0,j=0;i<n0;i++,j+=3)if(L.data[i*4+3]>200&&A0[j]>.9)for(let c=0;c<3;c++){const lo=P0[j+c]/A0[j+c];L.data[i*4+c]=Math.max(0,Math.min(255,L.data[i*4+c]+k*(L.data[i*4+c]-lo)))}}
   let cx=0,cy=0;OVAL.forEach(i=>{cx+=d[i][0];cy+=d[i][1]});cx/=OVAL.length;cy/=OVAL.length;
   mc.clearRect(0,0,W,H);mc.filter=`blur(${Math.max(3,w/22)}px)`;mc.fillStyle="#000";mc.beginPath();
   OVAL.forEach((i,k)=>{const x=cx+(d[i][0]-cx)*.94,y=cy+(d[i][1]-cy)*(d[i][1]<cy?.8:.95);k?mc.lineTo(x,y):mc.moveTo(x,y)});
   mc.closePath();mc.fill();
-  if($("keep").checked){mc.globalCompositeOperation="destination-out";
-    for(const [lp,f] of [...EYES.map(l=>[l,1.35]),[MOUTH,1.12]]){
+  {mc.globalCompositeOperation="destination-out";
+    for(const [lp,f] of ($("keep").checked?[...EYES.map(l=>[l,1.35]),[MOUTH,1.12]]:[[MOUTH,.97]])){
       let ex=0,ey=0;lp.forEach(i=>{ex+=t[i][0];ey+=t[i][1]});ex/=lp.length;ey/=lp.length;mc.beginPath();
       lp.forEach((i,k)=>{const x=ex+(t[i][0]-ex)*f,y=ey+(t[i][1]-ey)*f;k?mc.lineTo(x,y):mc.moveTo(x,y)});mc.closePath();mc.fill()}
     mc.globalCompositeOperation="source-over"}
@@ -224,7 +231,7 @@ $("go").onclick=async()=>{
   try{
     if(!tgtIsVideo){
       const img=await loadImg(tgtFile);
-      let s=Math.min(1,1280/Math.max(img.naturalWidth,img.naturalHeight));
+      let s=Math.min(1,2048/Math.max(img.naturalWidth,img.naturalHeight));
       out.width=img.naturalWidth*s|0;out.height=img.naturalHeight*s|0;
       octx.drawImage(img,0,0,out.width,out.height);
       const r=lmImg.detect(out);
