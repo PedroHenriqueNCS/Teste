@@ -34,7 +34,7 @@ button:disabled{opacity:.5}
 <div class="card"><h2>2. Foto ou vídeo de destino</h2>
 <div class="box"><input type="file" id="fTgt" accept="image/*,video/*"><div class="hint" id="hTgt">Toque para anexar foto ou vídeo</div><img id="pImg" hidden><video id="pVid" hidden muted playsinline controls></video></div></div>
 
-<div class="card"><h2>Seguir a expressão do destino: <span id="av">55</span>%</h2><input type="range" id="alpha" min="0" max="100" value="55" style="width:100%"><div class="note">Menos = mais parecido com o rosto anexado. Mais = acompanha melhor a expressão do destino.</div></div>
+<div class="card"><h2>Seguir a expressão do destino: <span id="av">55</span>%</h2><input type="range" id="alpha" min="0" max="100" value="55" style="width:100%"><label class="note" style="display:block;margin:8px 0"><input type="checkbox" id="keep"> Manter olhos e boca do destino (expressão mais natural; use acima de 70%)</label><div class="note">Menos = mais parecido com o rosto anexado. Mais = acompanha melhor a expressão do destino.</div></div>
 
 <button id="go" disabled>Trocar rostos</button>
 <div id="st">Carregando IA de rostos…</div>
@@ -119,8 +119,16 @@ function bl(s,d,n,m,s1,s2,r){for(let i=0;i<n;i++)for(let c=0;c<3;c++){const o=i*
   for(let j=-r;j<=r;j++)sum+=s[o+Math.min(m-1,Math.max(0,j))*s2];
   for(let j=0;j<m;j++){d[o+j*s2]=sum/(2*r+1);sum+=s[o+Math.min(m-1,j+r+1)*s2]-s[o+Math.max(0,j-r)*s2]}}}
 function blur3(a,w,h,r){const t=new Float32Array(a.length);bl(a,t,h,w,w*3,3,r);bl(t,a,w,h,3,w*3,r)}
+function loops(conns){const g={};conns.forEach(({start:a,end:b})=>{(g[a]??=[]).push(b);(g[b]??=[]).push(a)});
+  const seen=new Set(),res=[];
+  for(const k in g){if(seen.has(+k))continue;const lp=[];let p=-1,c=+k;
+    while(!seen.has(c)){seen.add(c);lp.push(c);const n=g[c].find(x=>x!==p&&!seen.has(x));if(n===undefined)break;p=c;c=n}
+    res.push(lp)}
+  return res}
+const EYES=[...loops(FaceLandmarker.FACE_LANDMARKS_LEFT_EYE),...loops(FaceLandmarker.FACE_LANDMARKS_RIGHT_EYE)];
+const MOUTH=[78,191,80,81,82,13,312,311,310,415,308,324,318,402,317,14,87,178,88,95];
 
-// ajuste de cor e luz por baixa frequência: aproxima o tom/iluminação da origem aos do destino
+// cor e luz por baixa frequência (ganho moderado por canal, sem dominante)
 function colorMatch(ctx,x0,y0,w,h,L){
   const sw=Math.max(4,w>>2),sh=Math.max(4,h>>2),r=Math.max(2,sw/6|0),sc=sm.getContext("2d",{willReadFrequently:true});
   sm.width=sw;sm.height=sh;
@@ -130,7 +138,9 @@ function colorMatch(ctx,x0,y0,w,h,L){
   for(let i=0,j=0;i<a.length;i+=4,j+=3){const al=a[i+3]/255;for(let c=0;c<3;c++){P[j+c]=a[i+c]*al;Q[j+c]=b[i+c]*al}}
   blur3(P,sw,sh,r);blur3(Q,sw,sh,r);
   const g=sc.createImageData(sw,sh);
-  for(let i=0,j=0;i<g.data.length;i+=4,j+=3){for(let c=0;c<3;c++){const v=P[j+c]>.5?Math.min(2,Math.max(.5,Q[j+c]/P[j+c])):1;g.data[i+c]=(Math.log2(v)+1)/2*255}g.data[i+3]=255}
+  for(let i=0,j=0;i<g.data.length;i+=4,j+=3){
+    const v=[0,1,2].map(c=>P[j+c]>.5?Math.min(2,Math.max(.5,Q[j+c]/P[j+c])):1),m=(v[0]+v[1]+v[2])/3;
+    for(let c=0;c<3;c++)g.data[i+c]=(Math.log2(m+(v[c]-m)*.6)+1)/2*255;g.data[i+3]=255}
   sc.putImageData(g,0,0);
   big.width=w;big.height=h;const bc=big.getContext("2d",{willReadFrequently:true});bc.imageSmoothingEnabled=true;bc.drawImage(sm,0,0,w,h);
   const G=bc.getImageData(0,0,w,h).data;
@@ -139,7 +149,7 @@ function colorMatch(ctx,x0,y0,w,h,L){
 
 function swap(ctx,W,H,lm){
   const t=lm.map(p=>[p.x*W,p.y*H]),N=t.length;
-  // alinha o rosto de origem ao destino (escala, rotação, posição) e mistura a forma conforme o controle
+  // alinha origem ao destino (escala, rotação, posição) e mistura a forma
   let ax=0,ay=0,bx=0,by=0;
   for(let i=0;i<N;i++){ax+=srcPts[i][0];ay+=srcPts[i][1];bx+=t[i][0];by+=t[i][1]}
   ax/=N;ay/=N;bx/=N;by/=N;let re=0,im=0,dn=0;
@@ -147,20 +157,35 @@ function swap(ctx,W,H,lm){
   re/=dn;im/=dn;const A=+$("alpha").value/100;
   const d=srcPts.map(([px,py],i)=>{const x=px-ax,y=py-ay,X=re*x-im*y+bx,Y=im*x+re*y+by;return[X*(1-A)+t[i][0]*A,Y*(1-A)+t[i][1]*A]});
   layer.width=mask.width=W;layer.height=mask.height=H;
-  const lc=layer.getContext("2d",{willReadFrequently:true}),mc=mask.getContext("2d");
+  const lc=layer.getContext("2d",{willReadFrequently:true}),mc=mask.getContext("2d",{willReadFrequently:true});
   lc.clearRect(0,0,W,H);
   for(const tr of TRIS)tri(lc,faceImg,srcPts,d,tr);
   let x0=W,y0=H,x1=0,y1=0;d.forEach(([x,y])=>{x0=Math.min(x0,x);y0=Math.min(y0,y);x1=Math.max(x1,x);y1=Math.max(y1,y)});
   x0=Math.max(0,x0|0);y0=Math.max(0,y0|0);x1=Math.min(W,x1+1|0);y1=Math.min(H,y1+1|0);
   const w=x1-x0,h=y1-y0;if(w<8||h<8)return;
-  const L=lc.getImageData(x0,y0,w,h);colorMatch(ctx,x0,y0,w,h,L);lc.putImageData(L,x0,y0);
-  // máscara: levemente menor que o oval (preserva a linha do cabelo do destino) e bem suavizada
+  const L=lc.getImageData(x0,y0,w,h);colorMatch(ctx,x0,y0,w,h,L);
+  // máscara: oval menor que o rosto (preserva linha do cabelo) e suavizada; opcional: olhos e boca do destino ficam
   let cx=0,cy=0;OVAL.forEach(i=>{cx+=d[i][0];cy+=d[i][1]});cx/=OVAL.length;cy/=OVAL.length;
-  mc.clearRect(0,0,W,H);mc.filter=`blur(${Math.max(3,w/16)}px)`;mc.fillStyle="#000";mc.beginPath();
+  mc.clearRect(0,0,W,H);mc.filter=`blur(${Math.max(3,w/22)}px)`;mc.fillStyle="#000";mc.beginPath();
   OVAL.forEach((i,k)=>{const x=cx+(d[i][0]-cx)*.94,y=cy+(d[i][1]-cy)*(d[i][1]<cy?.8:.95);k?mc.lineTo(x,y):mc.moveTo(x,y)});
-  mc.closePath();mc.fill();mc.filter="none";
-  lc.globalCompositeOperation="destination-in";lc.drawImage(mask,0,0);lc.globalCompositeOperation="source-over";
-  ctx.drawImage(layer,0,0);
+  mc.closePath();mc.fill();
+  if($("keep").checked){mc.globalCompositeOperation="destination-out";
+    for(const [lp,f] of [...EYES.map(l=>[l,1.35]),[MOUTH,1.12]]){
+      let ex=0,ey=0;lp.forEach(i=>{ex+=t[i][0];ey+=t[i][1]});ex/=lp.length;ey/=lp.length;mc.beginPath();
+      lp.forEach((i,k)=>{const x=ex+(t[i][0]-ex)*f,y=ey+(t[i][1]-ey)*f;k?mc.lineTo(x,y):mc.moveTo(x,y)});mc.closePath();mc.fill()}
+    mc.globalCompositeOperation="source-over"}
+  mc.filter="none";
+  // mistura em duas faixas: tons suaves misturam em área ampla, detalhes finos só dentro da máscara
+  const T=ctx.getImageData(x0,y0,w,h),M=mc.getImageData(x0,y0,w,h).data,n=w*h;
+  const LP=new Float32Array(n*3),A3=new Float32Array(n*3),TL=new Float32Array(n*3),ML=new Float32Array(n*3);
+  for(let i=0,j=0;i<n;i++,j+=3){const a=L.data[i*4+3]/255,m=M[i*4+3]/255;for(let c=0;c<3;c++){LP[j+c]=L.data[i*4+c]*a;A3[j+c]=a;TL[j+c]=T.data[i*4+c];ML[j+c]=m}}
+  const r1=Math.max(2,w/12|0),r2=Math.max(3,w/7|0);
+  blur3(LP,w,h,r1);blur3(A3,w,h,r1);blur3(TL,w,h,r1);blur3(ML,w,h,r2);
+  for(let i=0,j=0;i<n;i++,j+=3){const a=L.data[i*4+3]/255,mk=M[i*4+3]/255*a;
+    for(let c=0;c<3;c++){const lowT=TL[j+c],lowL=A3[j+c]>.02?LP[j+c]/A3[j+c]:lowT,ml=ML[j+c]*Math.min(1,A3[j+c]*2),
+      hiT=T.data[i*4+c]-lowT,hiL=L.data[i*4+c]-lowL;
+      T.data[i*4+c]=Math.max(0,Math.min(255,ml*lowL+(1-ml)*lowT+mk*hiL+(1-mk)*hiT))}}
+  ctx.putImageData(T,x0,y0);
 }
 
 const out=$("out"),octx=out.getContext("2d",{willReadFrequently:true});
