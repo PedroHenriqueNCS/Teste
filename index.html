@@ -34,7 +34,7 @@ button:disabled{opacity:.5}
 <div class="card"><h2>2. Foto ou vídeo de destino</h2>
 <div class="box"><input type="file" id="fTgt" accept="image/*,video/*"><div class="hint" id="hTgt">Toque para anexar foto ou vídeo</div><img id="pImg" hidden><video id="pVid" hidden muted playsinline controls></video></div></div>
 
-<div class="card"><h2>Seguir a expressão do destino: <span id="av">55</span>%</h2><input type="range" id="alpha" min="0" max="100" value="55" style="width:100%"><label class="note" style="display:block;margin:8px 0">Modo: <select id="mode"><option value="traits" selected>Transplante de traços (novo)</option><option value="full">Rosto inteiro (anterior)</option></select></label><label class="note" style="display:block;margin:8px 0"><input type="checkbox" id="sr" checked> Melhorar a resolução do rosto com IA (experimental; baixa uns 5 MB na 1ª vez)</label><label class="note" style="display:block;margin:8px 0"><input type="checkbox" id="keep"> Manter olhos e boca do destino (expressão mais natural; use acima de 70%)</label><div class="note">Menos = mais parecido com o rosto anexado. Mais = acompanha melhor a expressão do destino.</div></div>
+<div class="card"><h2>Seguir a expressão do destino: <span id="av">55</span>%</h2><input type="range" id="alpha" min="0" max="100" value="55" style="width:100%"><div class="note" style="margin:8px 0">Mistura do rosto anexado (bochechas e pele), só no modo de traços: <span id="mv">25</span>%<input type="range" id="mix" min="0" max="100" value="25" style="width:100%"></div><label class="note" style="display:block;margin:8px 0">Modo: <select id="mode"><option value="traits" selected>Transplante de traços (novo)</option><option value="full">Rosto inteiro (anterior)</option></select></label><label class="note" style="display:block;margin:8px 0"><input type="checkbox" id="sr" checked> Melhorar a resolução do rosto com IA (experimental; baixa uns 5 MB na 1ª vez)</label><label class="note" style="display:block;margin:8px 0"><input type="checkbox" id="keep"> Manter olhos e boca do destino (expressão mais natural; use acima de 70%)</label><div class="note">Menos = mais parecido com o rosto anexado. Mais = acompanha melhor a expressão do destino.</div></div>
 
 <button id="go" disabled>Trocar rostos</button>
 <div id="st">Carregando IA de rostos…</div>
@@ -42,7 +42,7 @@ button:disabled{opacity:.5}
 <div class="card"><h2>3. Resultado</h2>
 <div class="box"><canvas id="out" hidden></canvas><div class="hint" id="hOut">O resultado aparece aqui</div></div>
 <a class="dl" id="dl" hidden>Baixar resultado</a></div>
-<div class="note">Tudo roda no seu aparelho. Nada é enviado a servidores. · versão 9</div>
+<div class="note">Tudo roda no seu aparelho. Nada é enviado a servidores. · versão 10</div>
 
 <script type="module">
 const $=id=>document.getElementById(id), st=t=>$("st").textContent=t;
@@ -97,6 +97,7 @@ async function init(){
   st("IA pronta. Anexe o rosto e a foto/vídeo."); check();
 }
 init().catch(e=>st("Erro ao carregar a IA: "+e.message+" (abra por https e com internet)"));
+$("mix").oninput=e=>$("mv").textContent=e.target.value;
 $("alpha").oninput=e=>$("av").textContent=e.target.value;
 $("sr").onchange=()=>{if(faceOrig)prepFace()};
 const check=()=>$("go").disabled=!(lmImg&&srcPts&&tgtFile);
@@ -239,15 +240,14 @@ function swap(ctx,W,H,lm){
   const fillPts=(P,f)=>{let ex=0,ey=0;P.forEach(p=>{ex+=p[0];ey+=p[1]});ex/=P.length;ey/=P.length;mc.beginPath();
     P.forEach((p,k)=>{const x=ex+(p[0]-ex)*f,y=ey+(p[1]-ey)*f;k?mc.lineTo(x,y):mc.moveTo(x,y)});mc.closePath();mc.fill()};
   mc.clearRect(0,0,W,H);mc.filter=`blur(${Math.max(2,w/(traits?45:22))}px)`;mc.fillStyle="#000";
+  const oval=()=>{let cx=0,cy=0;OVAL.forEach(i=>{cx+=d[i][0];cy+=d[i][1]});cx/=OVAL.length;cy/=OVAL.length;mc.beginPath();
+    OVAL.forEach((i,k)=>{const x=cx+(d[i][0]-cx)*.94,y=cy+(d[i][1]-cy)*(d[i][1]<cy?.8:.95);k?mc.lineTo(x,y):mc.moveTo(x,y)});mc.closePath();mc.fill()};
   if(traits){
+    mc.globalAlpha=+$("mix").value/100;oval();mc.globalAlpha=1;
     if(!$("keep").checked){for(const e of EYES)fillPts(e.map(i=>d[i]),1.9);fillPts(OUTERLIP.map(i=>d[i]),1.12)}
     for(const br of BROWS)fillPts(br.map(i=>d[i]),1.35);
     fillPts(hull(NOSE.map(i=>d[i])),1.1);
-  }else{
-    let cx=0,cy=0;OVAL.forEach(i=>{cx+=d[i][0];cy+=d[i][1]});cx/=OVAL.length;cy/=OVAL.length;mc.beginPath();
-    OVAL.forEach((i,k)=>{const x=cx+(d[i][0]-cx)*.94,y=cy+(d[i][1]-cy)*(d[i][1]<cy?.8:.95);k?mc.lineTo(x,y):mc.moveTo(x,y)});
-    mc.closePath();mc.fill();
-  }
+  }else oval();
   const M0=mc.getImageData(x0,y0,w,h).data;
   {mc.globalCompositeOperation="destination-out";
     for(const [lp,f] of ($("keep").checked&&!traits?[...EYES.map(l=>[l,1.35]),[MOUTH,1.12]]:[[MOUTH,.97]])){
