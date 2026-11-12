@@ -42,7 +42,7 @@ button:disabled{opacity:.5}
 <div class="card"><h2>3. Resultado</h2>
 <div class="box"><canvas id="out" hidden></canvas><div class="hint" id="hOut">O resultado aparece aqui</div></div>
 <a class="dl" id="dl" hidden>Baixar resultado</a></div>
-<div class="note">Tudo roda no seu aparelho. Nada é enviado a servidores.</div>
+<div class="note">Tudo roda no seu aparelho. Nada é enviado a servidores. · versão 5</div>
 
 <script type="module">
 const $=id=>document.getElementById(id), st=t=>$("st").textContent=t;
@@ -114,7 +114,9 @@ function tri(ctx,img,s,d,[a,b,c]){
 }
 
 const layer=document.createElement("canvas"),mask=document.createElement("canvas"),sm=document.createElement("canvas"),big=document.createElement("canvas");
-const LUT=Array.from({length:256},(_,b)=>2**((b/255*2-1)*.85));
+const LUT=Array.from({length:256},(_,b)=>2**((b/255*2-1)*1.5));
+const OUTERLIP=[61,146,91,181,84,17,314,405,321,375,291,409,270,269,267,0,37,39,40,185];
+const BROWS=[[70,63,105,66,107,55,65,52,53,46],[300,293,334,296,336,285,295,282,283,276]];
 function bl(s,d,n,m,s1,s2,r){for(let i=0;i<n;i++)for(let c=0;c<3;c++){const o=i*s1+c;let sum=0;
   for(let j=-r;j<=r;j++)sum+=s[o+Math.min(m-1,Math.max(0,j))*s2];
   for(let j=0;j<m;j++){d[o+j*s2]=sum/(2*r+1);sum+=s[o+Math.min(m-1,j+r+1)*s2]-s[o+Math.max(0,j-r)*s2]}}}
@@ -128,19 +130,24 @@ function loops(conns){const g={};conns.forEach(({start:a,end:b})=>{(g[a]??=[]).p
 const EYES=[...loops(FaceLandmarker.FACE_LANDMARKS_LEFT_EYE),...loops(FaceLandmarker.FACE_LANDMARKS_RIGHT_EYE)];
 const MOUTH=[78,191,80,81,82,13,312,311,310,415,308,324,318,402,317,14,87,178,88,95];
 
-// cor e luz por baixa frequência (ganho moderado por canal, sem dominante)
-function colorMatch(ctx,x0,y0,w,h,L){
-  const sw=Math.max(4,w>>2),sh=Math.max(4,h>>2),r=Math.max(2,sw/6|0),sc=sm.getContext("2d",{willReadFrequently:true});
+// tom e luz: a pele do rosto anexado assume a cor da pele do destino (estatística só da pele, sem olhos/sobrancelhas/boca)
+function colorMatch(ctx,x0,y0,w,h,L,t){
+  const sw=Math.max(4,w>>2),sh=Math.max(4,h>>2),r=Math.max(3,sw/4|0),sc=sm.getContext("2d",{willReadFrequently:true});
   sm.width=sw;sm.height=sh;
-  sc.clearRect(0,0,sw,sh);sc.drawImage(layer,x0,y0,w,h,0,0,sw,sh);const a=sc.getImageData(0,0,sw,sh).data;
+  sc.clearRect(0,0,sw,sh);sc.drawImage(layer,x0,y0,w,h,0,0,sw,sh);
+  sc.globalCompositeOperation="destination-out";sc.setTransform(sw/w,0,0,sh/h,-x0*sw/w,-y0*sh/h);
+  for(const [lp,f] of [...EYES.map(l=>[l,1.9]),...BROWS.map(l=>[l,1.4]),[OUTERLIP,1.2]]){
+    let ex=0,ey=0;lp.forEach(i=>{ex+=t[i][0];ey+=t[i][1]});ex/=lp.length;ey/=lp.length;sc.beginPath();
+    lp.forEach((i,k)=>{const x=ex+(t[i][0]-ex)*f,y=ey+(t[i][1]-ey)*f;k?sc.lineTo(x,y):sc.moveTo(x,y)});sc.closePath();sc.fill()}
+  sc.setTransform(1,0,0,1,0,0);sc.globalCompositeOperation="source-over";
+  const a=sc.getImageData(0,0,sw,sh).data;
   sc.clearRect(0,0,sw,sh);sc.drawImage(ctx.canvas,x0,y0,w,h,0,0,sw,sh);const b=sc.getImageData(0,0,sw,sh).data;
   const P=new Float32Array(sw*sh*3),Q=new Float32Array(sw*sh*3);
   for(let i=0,j=0;i<a.length;i+=4,j+=3){const al=a[i+3]/255;for(let c=0;c<3;c++){P[j+c]=a[i+c]*al;Q[j+c]=b[i+c]*al}}
   blur3(P,sw,sh,r);blur3(Q,sw,sh,r);
   const g=sc.createImageData(sw,sh);
   for(let i=0,j=0;i<g.data.length;i+=4,j+=3){
-    const v=[0,1,2].map(c=>P[j+c]>.5?Math.min(2,Math.max(.5,Q[j+c]/P[j+c])):1),m=(v[0]+v[1]+v[2])/3;
-    for(let c=0;c<3;c++)g.data[i+c]=(Math.log2(m+(v[c]-m)*.6)+1)/2*255;g.data[i+3]=255}
+    for(let c=0;c<3;c++){const v=P[j+c]>.5?Math.min(2.8,Math.max(.35,Q[j+c]/P[j+c])):1;g.data[i+c]=(Math.log2(v)/1.5+1)/2*255}g.data[i+3]=255}
   sc.putImageData(g,0,0);
   big.width=w;big.height=h;const bc=big.getContext("2d",{willReadFrequently:true});bc.imageSmoothingEnabled=true;bc.drawImage(sm,0,0,w,h);
   const G=bc.getImageData(0,0,w,h).data;
@@ -163,7 +170,7 @@ function swap(ctx,W,H,lm){
   let x0=W,y0=H,x1=0,y1=0;d.forEach(([x,y])=>{x0=Math.min(x0,x);y0=Math.min(y0,y);x1=Math.max(x1,x);y1=Math.max(y1,y)});
   x0=Math.max(0,x0|0);y0=Math.max(0,y0|0);x1=Math.min(W,x1+1|0);y1=Math.min(H,y1+1|0);
   const w=x1-x0,h=y1-y0;if(w<8||h<8)return;
-  const L=lc.getImageData(x0,y0,w,h);colorMatch(ctx,x0,y0,w,h,L);
+  const L=lc.getImageData(x0,y0,w,h);colorMatch(ctx,x0,y0,w,h,L,t);
   // máscara: oval menor que o rosto (preserva linha do cabelo) e suavizada; opcional: olhos e boca do destino ficam
   let cx=0,cy=0;OVAL.forEach(i=>{cx+=d[i][0];cy+=d[i][1]});cx/=OVAL.length;cy/=OVAL.length;
   mc.clearRect(0,0,W,H);mc.filter=`blur(${Math.max(3,w/22)}px)`;mc.fillStyle="#000";mc.beginPath();
