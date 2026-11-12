@@ -34,7 +34,7 @@ button:disabled{opacity:.5}
 <div class="card"><h2>2. Foto ou vídeo de destino</h2>
 <div class="box"><input type="file" id="fTgt" accept="image/*,video/*"><div class="hint" id="hTgt">Toque para anexar foto ou vídeo</div><img id="pImg" hidden><video id="pVid" hidden muted playsinline controls></video></div></div>
 
-<div class="card"><h2>Seguir a expressão do destino: <span id="av">55</span>%</h2><input type="range" id="alpha" min="0" max="100" value="55" style="width:100%"><label class="note" style="display:block;margin:8px 0"><input type="checkbox" id="keep"> Manter olhos e boca do destino (expressão mais natural; use acima de 70%)</label><div class="note">Menos = mais parecido com o rosto anexado. Mais = acompanha melhor a expressão do destino.</div></div>
+<div class="card"><h2>Seguir a expressão do destino: <span id="av">55</span>%</h2><input type="range" id="alpha" min="0" max="100" value="55" style="width:100%"><label class="note" style="display:block;margin:8px 0"><input type="checkbox" id="sr" checked> Melhorar a resolução do rosto com IA (experimental; baixa uns 5 MB na 1ª vez)</label><label class="note" style="display:block;margin:8px 0"><input type="checkbox" id="keep"> Manter olhos e boca do destino (expressão mais natural; use acima de 70%)</label><div class="note">Menos = mais parecido com o rosto anexado. Mais = acompanha melhor a expressão do destino.</div></div>
 
 <button id="go" disabled>Trocar rostos</button>
 <div id="st">Carregando IA de rostos…</div>
@@ -42,7 +42,7 @@ button:disabled{opacity:.5}
 <div class="card"><h2>3. Resultado</h2>
 <div class="box"><canvas id="out" hidden></canvas><div class="hint" id="hOut">O resultado aparece aqui</div></div>
 <a class="dl" id="dl" hidden>Baixar resultado</a></div>
-<div class="note">Tudo roda no seu aparelho. Nada é enviado a servidores. · versão 7</div>
+<div class="note">Tudo roda no seu aparelho. Nada é enviado a servidores. · versão 8</div>
 
 <script type="module">
 const $=id=>document.getElementById(id), st=t=>$("st").textContent=t;
@@ -50,7 +50,35 @@ let mp;
 try{mp=await import("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/+esm")}
 catch(e){st("Falha ao baixar a biblioteca de IA: "+e.message+". Abra pelo link do site, com internet.");throw e}
 const {FaceLandmarker, FilesetResolver}=mp;
+let faceOrig=null, ptsOrig=null, upsc=null;
 let lmImg, lmVid, faceImg=null, srcPts=null, tgtFile=null, tgtIsVideo=false;
+
+
+const loadScript=u=>new Promise((ok,no)=>{const e=document.createElement("script");e.src=u;e.onload=ok;e.onerror=()=>no(new Error("não carregou "+u.split("/")[4]));document.head.appendChild(e)});
+const loadImgSrc=u=>new Promise((ok,no)=>{const i=new Image();i.onload=()=>ok(i);i.onerror=no;i.src=u});
+// prepara o rosto de origem; se marcado, amplia com IA (ESRGAN leve) uma única vez
+async function prepFace(){
+  srcPts=null;check();
+  let F=faceOrig,P=ptsOrig;
+  if($("sr").checked){
+    try{
+      const xs=P.map(p=>p[0]),ys=P.map(p=>p[1]),mx=Math.min(...xs),Mx=Math.max(...xs),my=Math.min(...ys),My=Math.max(...ys),pad=.3*Math.max(Mx-mx,My-my);
+      const cx0=Math.max(0,mx-pad|0),cy0=Math.max(0,my-pad|0),cw=Math.min(F.width,Mx+pad|0)-cx0,ch=Math.min(F.height,My+pad|0)-cy0;
+      if(Math.max(cw,ch)>900)throw Object.assign(new Error("skip"),{skip:1});
+      st("Melhorando a resolução do rosto com IA… (pode levar alguns segundos)");
+      if(!upsc){
+        await loadScript("https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js");
+        await loadScript("https://cdn.jsdelivr.net/npm/upscaler@latest/dist/browser/umd/upscaler.min.js");
+        const U=window.Upscaler?.default||window.Upscaler;upsc=new U();
+      }
+      const c=document.createElement("canvas");c.width=cw;c.height=ch;c.getContext("2d").drawImage(F,cx0,cy0,cw,ch,0,0,cw,ch);
+      const out=await loadImgSrc(await upsc.upscale(c.toDataURL("image/png"),{patchSize:64,padding:4}));
+      const k=out.naturalWidth/cw,nc=document.createElement("canvas");nc.width=out.naturalWidth;nc.height=out.naturalHeight;nc.getContext("2d").drawImage(out,0,0);
+      F=nc;P=P.map(([x,y])=>[(x-cx0)*k,(y-cy0)*k]);
+    }catch(e){st(e.skip?"O rosto já tem boa resolução, sem ampliação.":"Melhoria por IA indisponível ("+e.message+"). Usando a versão normal.");await new Promise(r=>setTimeout(r,1500))}
+  }
+  faceImg=F;srcPts=P;buildPyr();st("Rosto reconhecido ✔");check();
+}
 
 // triângulos a partir da malha do MediaPipe (ciclos de 3 arestas)
 const adj={};
@@ -70,6 +98,7 @@ async function init(){
 }
 init().catch(e=>st("Erro ao carregar a IA: "+e.message+" (abra por https e com internet)"));
 $("alpha").oninput=e=>$("av").textContent=e.target.value;
+$("sr").onchange=()=>{if(faceOrig)prepFace()};
 const check=()=>$("go").disabled=!(lmImg&&srcPts&&tgtFile);
 
 const loadImg=f=>new Promise((r,j)=>{const i=new Image();i.onload=()=>r(i);i.onerror=j;i.src=URL.createObjectURL(f)});
@@ -86,8 +115,7 @@ $("fFace").onchange=async e=>{
   const r=lmImg.detect(faceImg);
   if(!r.faceLandmarks.length){st("Nenhum rosto encontrado nessa foto. Tente outra, de frente e bem iluminada.");check();return}
   srcPts=r.faceLandmarks[0].map(p=>[p.x*faceImg.width,p.y*faceImg.height]);
-  buildPyr();
-  st("Rosto reconhecido ✔");check();
+  faceOrig=faceImg;ptsOrig=srcPts;await prepFace();
 };
 
 $("fTgt").onchange=e=>{
@@ -198,6 +226,7 @@ function swap(ctx,W,H,lm){
   mc.clearRect(0,0,W,H);mc.filter=`blur(${Math.max(3,w/22)}px)`;mc.fillStyle="#000";mc.beginPath();
   OVAL.forEach((i,k)=>{const x=cx+(d[i][0]-cx)*.94,y=cy+(d[i][1]-cy)*(d[i][1]<cy?.8:.95);k?mc.lineTo(x,y):mc.moveTo(x,y)});
   mc.closePath();mc.fill();
+  const M0=mc.getImageData(x0,y0,w,h).data;
   {mc.globalCompositeOperation="destination-out";
     for(const [lp,f] of ($("keep").checked?[...EYES.map(l=>[l,1.35]),[MOUTH,1.12]]:[[MOUTH,.97]])){
       let ex=0,ey=0;lp.forEach(i=>{ex+=t[i][0];ey+=t[i][1]});ex/=lp.length;ey/=lp.length;mc.beginPath();
@@ -213,11 +242,11 @@ function swap(ctx,W,H,lm){
   const soft=dL>dT?Math.max(.6,dT/dL):1,noise=dT>dL?Math.sqrt(dT*dT-dL*dL)/Math.SQRT2*.9:0;
   // mistura em duas faixas
   const LP=new Float32Array(n*3),A3=new Float32Array(n*3),TL=new Float32Array(n*3),ML=new Float32Array(n*3);
-  for(let i=0,j=0;i<n;i++,j+=3){const a=L.data[i*4+3]/255,m=M[i*4+3]/255;for(let c=0;c<3;c++){LP[j+c]=L.data[i*4+c]*a;A3[j+c]=a;TL[j+c]=T.data[i*4+c];ML[j+c]=m}}
+  for(let i=0,j=0;i<n;i++,j+=3){const a=L.data[i*4+3]/255,m=M[i*4+3]/255;for(let c=0;c<3;c++){LP[j+c]=L.data[i*4+c]*a;A3[j+c]=a;TL[j+c]=T.data[i*4+c];ML[j+c]=M0[i*4+3]/255}}
   const r1=Math.max(2,w/12|0),r2=Math.max(3,w/7|0);
   blur3(LP,w,h,r1);blur3(A3,w,h,r1);blur3(TL,w,h,r1);blur3(ML,w,h,r2);
   for(let i=0,j=0;i<n;i++,j+=3){const a=L.data[i*4+3]/255,mk=M[i*4+3]/255*a,nz=noise*mk*gz();
-    for(let c=0;c<3;c++){const lowT=TL[j+c],lowL=A3[j+c]>.02?LP[j+c]/A3[j+c]:lowT,ml=ML[j+c]*Math.min(1,A3[j+c]*2),
+    for(let c=0;c<3;c++){const lowT=TL[j+c],lowL=A3[j+c]>.02?LP[j+c]/A3[j+c]:lowT,ml=ML[j+c]*Math.min(1,A3[j+c]*2)*(M0[i*4+3]>8?Math.min(1,M[i*4+3]/M0[i*4+3]):1),
       hiT=T.data[i*4+c]-lowT,hiL=(L.data[i*4+c]-lowL)*soft;
       T.data[i*4+c]=Math.max(0,Math.min(255,ml*lowL+(1-ml)*lowT+mk*hiL+(1-mk)*hiT+nz))}}
   ctx.putImageData(T,x0,y0);
