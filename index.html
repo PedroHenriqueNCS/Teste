@@ -34,7 +34,7 @@ button:disabled{opacity:.5}
 <div class="card"><h2>2. Foto ou vídeo de destino</h2>
 <div class="box"><input type="file" id="fTgt" accept="image/*,video/*"><div class="hint" id="hTgt">Toque para anexar foto ou vídeo</div><img id="pImg" hidden><video id="pVid" hidden muted playsinline controls></video></div></div>
 
-<div class="card"><h2>Seguir a expressão do destino: <span id="av">55</span>%</h2><input type="range" id="alpha" min="0" max="100" value="55" style="width:100%"><label class="note" style="display:block;margin:8px 0"><input type="checkbox" id="sr" checked> Melhorar a resolução do rosto com IA (experimental; baixa uns 5 MB na 1ª vez)</label><label class="note" style="display:block;margin:8px 0"><input type="checkbox" id="keep"> Manter olhos e boca do destino (expressão mais natural; use acima de 70%)</label><div class="note">Menos = mais parecido com o rosto anexado. Mais = acompanha melhor a expressão do destino.</div></div>
+<div class="card"><h2>Seguir a expressão do destino: <span id="av">55</span>%</h2><input type="range" id="alpha" min="0" max="100" value="55" style="width:100%"><label class="note" style="display:block;margin:8px 0">Modo: <select id="mode"><option value="traits" selected>Transplante de traços (novo)</option><option value="full">Rosto inteiro (anterior)</option></select></label><label class="note" style="display:block;margin:8px 0"><input type="checkbox" id="sr" checked> Melhorar a resolução do rosto com IA (experimental; baixa uns 5 MB na 1ª vez)</label><label class="note" style="display:block;margin:8px 0"><input type="checkbox" id="keep"> Manter olhos e boca do destino (expressão mais natural; use acima de 70%)</label><div class="note">Menos = mais parecido com o rosto anexado. Mais = acompanha melhor a expressão do destino.</div></div>
 
 <button id="go" disabled>Trocar rostos</button>
 <div id="st">Carregando IA de rostos…</div>
@@ -42,7 +42,7 @@ button:disabled{opacity:.5}
 <div class="card"><h2>3. Resultado</h2>
 <div class="box"><canvas id="out" hidden></canvas><div class="hint" id="hOut">O resultado aparece aqui</div></div>
 <a class="dl" id="dl" hidden>Baixar resultado</a></div>
-<div class="note">Tudo roda no seu aparelho. Nada é enviado a servidores. · versão 8</div>
+<div class="note">Tudo roda no seu aparelho. Nada é enviado a servidores. · versão 9</div>
 
 <script type="module">
 const $=id=>document.getElementById(id), st=t=>$("st").textContent=t;
@@ -142,7 +142,7 @@ function tri(ctx,img,s,d,[a,b,c]){
   ctx.closePath();ctx.clip();ctx.setTransform(A,B,C,D,E,F);ctx.drawImage(img,0,0);ctx.restore();
 }
 
-const layer=document.createElement("canvas"),mask=document.createElement("canvas"),sm=document.createElement("canvas"),big=document.createElement("canvas");
+const baseC=document.createElement("canvas"),layer=document.createElement("canvas"),mask=document.createElement("canvas"),sm=document.createElement("canvas"),big=document.createElement("canvas");
 const LUT=Array.from({length:256},(_,b)=>2**((b/255*2-1)*1.5));
 const OUTERLIP=[61,146,91,181,84,17,314,405,321,375,291,409,270,269,267,0,37,39,40,185];
 const BROWS=[[70,63,105,66,107,55,65,52,53,46],[300,293,334,296,336,285,295,282,283,276]];
@@ -158,6 +158,12 @@ function loops(conns){const g={};conns.forEach(({start:a,end:b})=>{(g[a]??=[]).p
   return res}
 const EYES=[...loops(FaceLandmarker.FACE_LANDMARKS_LEFT_EYE),...loops(FaceLandmarker.FACE_LANDMARKS_RIGHT_EYE)];
 const MOUTH=[78,191,80,81,82,13,312,311,310,415,308,324,318,402,317,14,87,178,88,95];
+
+const NOSE=[6,198,420,129,358,49,279,48,278,98,327,2,94,19,1,4,5];
+function hull(P){P=P.slice().sort((a,b)=>a[0]-b[0]||a[1]-b[1]);const cr=(o,a,b)=>(a[0]-o[0])*(b[1]-o[1])-(a[1]-o[1])*(b[0]-o[0]);const lo=[],up=[];
+  for(const p of P){while(lo.length>1&&cr(lo[lo.length-2],lo[lo.length-1],p)<=0)lo.pop();lo.push(p)}
+  for(const p of P.slice().reverse()){while(up.length>1&&cr(up[up.length-2],up[up.length-1],p)<=0)up.pop();up.push(p)}
+  return lo.slice(0,-1).concat(up.slice(0,-1))}
 
 // pirâmide da foto de origem: evita serrilhado quando o rosto do destino é menor
 let pyr=[];
@@ -209,7 +215,15 @@ function swap(ctx,W,H,lm){
   for(let i=0;i<N;i++){const x=srcPts[i][0]-ax,y=srcPts[i][1]-ay,u=t[i][0]-bx,v=t[i][1]-by;re+=x*u+y*v;im+=x*v-y*u;dn+=x*x+y*y}
   re/=dn;im/=dn;const A=+$("alpha").value/100;
   const lv=Math.min(pyr.length-1,Math.max(0,Math.floor(Math.log2(1/Math.hypot(re,im)))));
-  const d=srcPts.map(([px,py],i)=>{const x=px-ax,y=py-ay,X=re*x-im*y+bx,Y=im*x+re*y+by;return[X*(1-A)+t[i][0]*A,Y*(1-A)+t[i][1]*A]});
+  let d=srcPts.map(([px,py],i)=>{const x=px-ax,y=py-ay,X=re*x-im*y+bx,Y=im*x+re*y+by;return[X*(1-A)+t[i][0]*A,Y*(1-A)+t[i][1]*A]});
+  const traits=$("mode").value==="traits";
+  if(traits){ // base: o rosto do destino é remodelado (sem mexer no contorno) rumo às proporções do rosto anexado
+    const ov=OVAL.map(i=>t[i]),xs=ov.map(p=>p[0]),ys=ov.map(p=>p[1]),ox=(Math.min(...xs)+Math.max(...xs))/2,oy=(Math.min(...ys)+Math.max(...ys))/2,rx=(Math.max(...xs)-Math.min(...xs))/2,ry=(Math.max(...ys)-Math.min(...ys))/2;
+    const m=t.map(([x,y],i)=>{const ro=Math.hypot((x-ox)/rx,(y-oy)/ry),wt=ro>=.95?0:ro<=.55?1:(.95-ro)/.4;return[x+(d[i][0]-x)*wt,y+(d[i][1]-y)*wt]});
+    baseC.width=W;baseC.height=H;baseC.getContext("2d").drawImage(ctx.canvas,0,0);
+    ctx.imageSmoothingQuality="high";for(const tr of TRIS)tri(ctx,baseC,t,m,tr);
+    d=m}
+  const tt=traits?d:t;
   layer.width=mask.width=W;layer.height=mask.height=H;
   const lc=layer.getContext("2d",{willReadFrequently:true}),mc=mask.getContext("2d",{willReadFrequently:true});
   lc.imageSmoothingEnabled=true;lc.imageSmoothingQuality="high";lc.clearRect(0,0,W,H);
@@ -217,20 +231,28 @@ function swap(ctx,W,H,lm){
   let x0=W,y0=H,x1=0,y1=0;d.forEach(([x,y])=>{x0=Math.min(x0,x);y0=Math.min(y0,y);x1=Math.max(x1,x);y1=Math.max(y1,y)});
   x0=Math.max(0,x0|0);y0=Math.max(0,y0|0);x1=Math.min(W,x1+1|0);y1=Math.min(H,y1+1|0);
   const w=x1-x0,h=y1-y0;if(w<8||h<8)return;
-  const L=lc.getImageData(x0,y0,w,h);colorMatch(ctx,x0,y0,w,h,L,t);
+  const L=lc.getImageData(x0,y0,w,h);colorMatch(ctx,x0,y0,w,h,L,tt);
   {const n0=w*h,P0=new Float32Array(n0*3),A0=new Float32Array(n0*3),r0=Math.max(1,Math.round(w/160)),up=Math.hypot(re,im)*2**lv,k=.4+.8*Math.max(0,Math.min(1,up-.8));
    for(let i=0,j=0;i<n0;i++,j+=3){const a=L.data[i*4+3]/255;for(let c=0;c<3;c++){P0[j+c]=L.data[i*4+c]*a;A0[j+c]=a}}
    blur3(P0,w,h,r0);blur3(A0,w,h,r0);
    for(let i=0,j=0;i<n0;i++,j+=3)if(L.data[i*4+3]>200&&A0[j]>.9)for(let c=0;c<3;c++){const lo=P0[j+c]/A0[j+c];L.data[i*4+c]=Math.max(0,Math.min(255,L.data[i*4+c]+k*(L.data[i*4+c]-lo)))}}
-  let cx=0,cy=0;OVAL.forEach(i=>{cx+=d[i][0];cy+=d[i][1]});cx/=OVAL.length;cy/=OVAL.length;
-  mc.clearRect(0,0,W,H);mc.filter=`blur(${Math.max(3,w/22)}px)`;mc.fillStyle="#000";mc.beginPath();
-  OVAL.forEach((i,k)=>{const x=cx+(d[i][0]-cx)*.94,y=cy+(d[i][1]-cy)*(d[i][1]<cy?.8:.95);k?mc.lineTo(x,y):mc.moveTo(x,y)});
-  mc.closePath();mc.fill();
+  const fillPts=(P,f)=>{let ex=0,ey=0;P.forEach(p=>{ex+=p[0];ey+=p[1]});ex/=P.length;ey/=P.length;mc.beginPath();
+    P.forEach((p,k)=>{const x=ex+(p[0]-ex)*f,y=ey+(p[1]-ey)*f;k?mc.lineTo(x,y):mc.moveTo(x,y)});mc.closePath();mc.fill()};
+  mc.clearRect(0,0,W,H);mc.filter=`blur(${Math.max(2,w/(traits?45:22))}px)`;mc.fillStyle="#000";
+  if(traits){
+    if(!$("keep").checked){for(const e of EYES)fillPts(e.map(i=>d[i]),1.9);fillPts(OUTERLIP.map(i=>d[i]),1.12)}
+    for(const br of BROWS)fillPts(br.map(i=>d[i]),1.35);
+    fillPts(hull(NOSE.map(i=>d[i])),1.1);
+  }else{
+    let cx=0,cy=0;OVAL.forEach(i=>{cx+=d[i][0];cy+=d[i][1]});cx/=OVAL.length;cy/=OVAL.length;mc.beginPath();
+    OVAL.forEach((i,k)=>{const x=cx+(d[i][0]-cx)*.94,y=cy+(d[i][1]-cy)*(d[i][1]<cy?.8:.95);k?mc.lineTo(x,y):mc.moveTo(x,y)});
+    mc.closePath();mc.fill();
+  }
   const M0=mc.getImageData(x0,y0,w,h).data;
   {mc.globalCompositeOperation="destination-out";
-    for(const [lp,f] of ($("keep").checked?[...EYES.map(l=>[l,1.35]),[MOUTH,1.12]]:[[MOUTH,.97]])){
-      let ex=0,ey=0;lp.forEach(i=>{ex+=t[i][0];ey+=t[i][1]});ex/=lp.length;ey/=lp.length;mc.beginPath();
-      lp.forEach((i,k)=>{const x=ex+(t[i][0]-ex)*f,y=ey+(t[i][1]-ey)*f;k?mc.lineTo(x,y):mc.moveTo(x,y)});mc.closePath();mc.fill()}
+    for(const [lp,f] of ($("keep").checked&&!traits?[...EYES.map(l=>[l,1.35]),[MOUTH,1.12]]:[[MOUTH,.97]])){
+      let ex=0,ey=0;lp.forEach(i=>{ex+=tt[i][0];ey+=tt[i][1]});ex/=lp.length;ey/=lp.length;mc.beginPath();
+      lp.forEach((i,k)=>{const x=ex+(tt[i][0]-ex)*f,y=ey+(tt[i][1]-ey)*f;k?mc.lineTo(x,y):mc.moveTo(x,y)});mc.closePath();mc.fill()}
     mc.globalCompositeOperation="source-over"}
   mc.filter="none";
   const T=ctx.getImageData(x0,y0,w,h),M=mc.getImageData(x0,y0,w,h).data,n=w*h;
@@ -243,7 +265,7 @@ function swap(ctx,W,H,lm){
   // mistura em duas faixas
   const LP=new Float32Array(n*3),A3=new Float32Array(n*3),TL=new Float32Array(n*3),ML=new Float32Array(n*3);
   for(let i=0,j=0;i<n;i++,j+=3){const a=L.data[i*4+3]/255,m=M[i*4+3]/255;for(let c=0;c<3;c++){LP[j+c]=L.data[i*4+c]*a;A3[j+c]=a;TL[j+c]=T.data[i*4+c];ML[j+c]=M0[i*4+3]/255}}
-  const r1=Math.max(2,w/12|0),r2=Math.max(3,w/7|0);
+  const r1=Math.max(2,w/(traits?24:12)|0),r2=Math.max(3,w/(traits?18:7)|0);
   blur3(LP,w,h,r1);blur3(A3,w,h,r1);blur3(TL,w,h,r1);blur3(ML,w,h,r2);
   for(let i=0,j=0;i<n;i++,j+=3){const a=L.data[i*4+3]/255,mk=M[i*4+3]/255*a,nz=noise*mk*gz();
     for(let c=0;c<3;c++){const lowT=TL[j+c],lowL=A3[j+c]>.02?LP[j+c]/A3[j+c]:lowT,ml=ML[j+c]*Math.min(1,A3[j+c]*2)*(M0[i*4+3]>8?Math.min(1,M[i*4+3]/M0[i*4+3]):1),
