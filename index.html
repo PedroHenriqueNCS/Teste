@@ -42,7 +42,7 @@ button:disabled{opacity:.5}
 <div class="card"><h2>3. Resultado</h2>
 <div class="box"><canvas id="out" hidden></canvas><div class="hint" id="hOut">O resultado aparece aqui</div></div>
 <a class="dl" id="dl" hidden>Baixar resultado</a></div>
-<div class="note">Tudo roda no seu aparelho. Nada é enviado a servidores. · versão 5</div>
+<div class="note">Tudo roda no seu aparelho. Nada é enviado a servidores. · versão 6</div>
 
 <script type="module">
 const $=id=>document.getElementById(id), st=t=>$("st").textContent=t;
@@ -86,6 +86,7 @@ $("fFace").onchange=async e=>{
   const r=lmImg.detect(faceImg);
   if(!r.faceLandmarks.length){st("Nenhum rosto encontrado nessa foto. Tente outra, de frente e bem iluminada.");check();return}
   srcPts=r.faceLandmarks[0].map(p=>[p.x*faceImg.width,p.y*faceImg.height]);
+  buildPyr();
   st("Rosto reconhecido ✔");check();
 };
 
@@ -130,7 +131,15 @@ function loops(conns){const g={};conns.forEach(({start:a,end:b})=>{(g[a]??=[]).p
 const EYES=[...loops(FaceLandmarker.FACE_LANDMARKS_LEFT_EYE),...loops(FaceLandmarker.FACE_LANDMARKS_RIGHT_EYE)];
 const MOUTH=[78,191,80,81,82,13,312,311,310,415,308,324,318,402,317,14,87,178,88,95];
 
-// tom e luz: a pele do rosto anexado assume a cor da pele do destino (estatística só da pele, sem olhos/sobrancelhas/boca)
+// pirâmide da foto de origem: evita serrilhado quando o rosto do destino é menor
+let pyr=[];
+function buildPyr(){pyr=[];let c=faceImg,k=1;
+  while(true){pyr.push({c,p:srcPts.map(([x,y])=>[x/k,y/k])});
+    if(c.width<200)break;
+    const n=document.createElement("canvas");n.width=c.width>>1;n.height=c.height>>1;
+    const x=n.getContext("2d");x.imageSmoothingQuality="high";x.drawImage(c,0,0,n.width,n.height);c=n;k*=2}}
+
+// tom (pele do destino, só pele na estatística) + luz direcional (luminância em escala menor)
 function colorMatch(ctx,x0,y0,w,h,L,t){
   const sw=Math.max(4,w>>2),sh=Math.max(4,h>>2),r=Math.max(3,sw/4|0),sc=sm.getContext("2d",{willReadFrequently:true});
   sm.width=sw;sm.height=sh;
@@ -142,36 +151,42 @@ function colorMatch(ctx,x0,y0,w,h,L,t){
   sc.setTransform(1,0,0,1,0,0);sc.globalCompositeOperation="source-over";
   const a=sc.getImageData(0,0,sw,sh).data;
   sc.clearRect(0,0,sw,sh);sc.drawImage(ctx.canvas,x0,y0,w,h,0,0,sw,sh);const b=sc.getImageData(0,0,sw,sh).data;
-  const P=new Float32Array(sw*sh*3),Q=new Float32Array(sw*sh*3);
+  const n=sw*sh*3,P=new Float32Array(n),Q=new Float32Array(n);
   for(let i=0,j=0;i<a.length;i+=4,j+=3){const al=a[i+3]/255;for(let c=0;c<3;c++){P[j+c]=a[i+c]*al;Q[j+c]=b[i+c]*al}}
-  blur3(P,sw,sh,r);blur3(Q,sw,sh,r);
+  const Pb=Float32Array.from(P),Qb=Float32Array.from(Q);blur3(Pb,sw,sh,r);blur3(Qb,sw,sh,r);
+  const G=new Float32Array(n),yP=new Float32Array(n),yQ=new Float32Array(n),W3=[.3,.59,.11];
+  for(let j=0;j<n;j+=3){let sp=0,sq=0;
+    for(let c=0;c<3;c++){const v=Pb[j+c]>.5?Math.min(2.8,Math.max(.35,Qb[j+c]/Pb[j+c])):1;G[j+c]=v;sp+=P[j+c]*v*W3[c];sq+=Q[j+c]*W3[c]}
+    yP[j]=yP[j+1]=yP[j+2]=sp;yQ[j]=yQ[j+1]=yQ[j+2]=sq}
+  const r2=Math.max(2,sw/10|0);blur3(yP,sw,sh,r2);blur3(yQ,sw,sh,r2);
   const g=sc.createImageData(sw,sh);
   for(let i=0,j=0;i<g.data.length;i+=4,j+=3){
-    for(let c=0;c<3;c++){const v=P[j+c]>.5?Math.min(2.8,Math.max(.35,Q[j+c]/P[j+c])):1;g.data[i+c]=(Math.log2(v)/1.5+1)/2*255}g.data[i+3]=255}
+    const l=yP[j]>.5?Math.min(1.6,Math.max(.6,yQ[j]/yP[j]))**.8:1;
+    for(let c=0;c<3;c++){const v=Math.min(2.8,Math.max(.35,G[j+c]*l));g.data[i+c]=(Math.log2(v)/1.5+1)/2*255}g.data[i+3]=255}
   sc.putImageData(g,0,0);
   big.width=w;big.height=h;const bc=big.getContext("2d",{willReadFrequently:true});bc.imageSmoothingEnabled=true;bc.drawImage(sm,0,0,w,h);
-  const G=bc.getImageData(0,0,w,h).data;
-  for(let i=0;i<L.data.length;i+=4)if(L.data[i+3])for(let c=0;c<3;c++)L.data[i+c]=Math.min(255,L.data[i+c]*LUT[G[i+c]]);
+  const GD=bc.getImageData(0,0,w,h).data;
+  for(let i=0;i<L.data.length;i+=4)if(L.data[i+3])for(let c=0;c<3;c++)L.data[i+c]=Math.min(255,L.data[i+c]*LUT[GD[i+c]]);
 }
+const gz=()=>Math.sqrt(-2*Math.log(1-Math.random()))*Math.cos(6.2832*Math.random());
 
 function swap(ctx,W,H,lm){
   const t=lm.map(p=>[p.x*W,p.y*H]),N=t.length;
-  // alinha origem ao destino (escala, rotação, posição) e mistura a forma
   let ax=0,ay=0,bx=0,by=0;
   for(let i=0;i<N;i++){ax+=srcPts[i][0];ay+=srcPts[i][1];bx+=t[i][0];by+=t[i][1]}
   ax/=N;ay/=N;bx/=N;by/=N;let re=0,im=0,dn=0;
   for(let i=0;i<N;i++){const x=srcPts[i][0]-ax,y=srcPts[i][1]-ay,u=t[i][0]-bx,v=t[i][1]-by;re+=x*u+y*v;im+=x*v-y*u;dn+=x*x+y*y}
   re/=dn;im/=dn;const A=+$("alpha").value/100;
+  const lv=Math.min(pyr.length-1,Math.max(0,Math.floor(Math.log2(1/Math.hypot(re,im)))));
   const d=srcPts.map(([px,py],i)=>{const x=px-ax,y=py-ay,X=re*x-im*y+bx,Y=im*x+re*y+by;return[X*(1-A)+t[i][0]*A,Y*(1-A)+t[i][1]*A]});
   layer.width=mask.width=W;layer.height=mask.height=H;
   const lc=layer.getContext("2d",{willReadFrequently:true}),mc=mask.getContext("2d",{willReadFrequently:true});
   lc.clearRect(0,0,W,H);
-  for(const tr of TRIS)tri(lc,faceImg,srcPts,d,tr);
+  for(const tr of TRIS)tri(lc,pyr[lv].c,pyr[lv].p,d,tr);
   let x0=W,y0=H,x1=0,y1=0;d.forEach(([x,y])=>{x0=Math.min(x0,x);y0=Math.min(y0,y);x1=Math.max(x1,x);y1=Math.max(y1,y)});
   x0=Math.max(0,x0|0);y0=Math.max(0,y0|0);x1=Math.min(W,x1+1|0);y1=Math.min(H,y1+1|0);
   const w=x1-x0,h=y1-y0;if(w<8||h<8)return;
   const L=lc.getImageData(x0,y0,w,h);colorMatch(ctx,x0,y0,w,h,L,t);
-  // máscara: oval menor que o rosto (preserva linha do cabelo) e suavizada; opcional: olhos e boca do destino ficam
   let cx=0,cy=0;OVAL.forEach(i=>{cx+=d[i][0];cy+=d[i][1]});cx/=OVAL.length;cy/=OVAL.length;
   mc.clearRect(0,0,W,H);mc.filter=`blur(${Math.max(3,w/22)}px)`;mc.fillStyle="#000";mc.beginPath();
   OVAL.forEach((i,k)=>{const x=cx+(d[i][0]-cx)*.94,y=cy+(d[i][1]-cy)*(d[i][1]<cy?.8:.95);k?mc.lineTo(x,y):mc.moveTo(x,y)});
@@ -182,16 +197,22 @@ function swap(ctx,W,H,lm){
       lp.forEach((i,k)=>{const x=ex+(t[i][0]-ex)*f,y=ey+(t[i][1]-ey)*f;k?mc.lineTo(x,y):mc.moveTo(x,y)});mc.closePath();mc.fill()}
     mc.globalCompositeOperation="source-over"}
   mc.filter="none";
-  // mistura em duas faixas: tons suaves misturam em área ampla, detalhes finos só dentro da máscara
   const T=ctx.getImageData(x0,y0,w,h),M=mc.getImageData(x0,y0,w,h).data,n=w*h;
+  // nitidez e grão: mede o detalhe fino do destino e do rosto anexado dentro da máscara
+  const yl=(k,p)=>.3*k[p]+.59*k[p+1]+.11*k[p+2];let sT=0,sL=0,cn=0;
+  for(let y=0;y<h;y++)for(let x=1;x<w;x++){const i=(y*w+x)*4;if(M[i+3]<200||L.data[i+3]<240)continue;
+    const dt=yl(T.data,i)-yl(T.data,i-4),dl=yl(L.data,i)-yl(L.data,i-4);sT+=dt*dt;sL+=dl*dl;cn++}
+  const dT=Math.sqrt(sT/(cn||1)),dL=Math.sqrt(sL/(cn||1));
+  const soft=dL>dT?Math.max(.6,dT/dL):1,noise=dT>dL?Math.sqrt(dT*dT-dL*dL)/Math.SQRT2*.9:0;
+  // mistura em duas faixas
   const LP=new Float32Array(n*3),A3=new Float32Array(n*3),TL=new Float32Array(n*3),ML=new Float32Array(n*3);
   for(let i=0,j=0;i<n;i++,j+=3){const a=L.data[i*4+3]/255,m=M[i*4+3]/255;for(let c=0;c<3;c++){LP[j+c]=L.data[i*4+c]*a;A3[j+c]=a;TL[j+c]=T.data[i*4+c];ML[j+c]=m}}
   const r1=Math.max(2,w/12|0),r2=Math.max(3,w/7|0);
   blur3(LP,w,h,r1);blur3(A3,w,h,r1);blur3(TL,w,h,r1);blur3(ML,w,h,r2);
-  for(let i=0,j=0;i<n;i++,j+=3){const a=L.data[i*4+3]/255,mk=M[i*4+3]/255*a;
+  for(let i=0,j=0;i<n;i++,j+=3){const a=L.data[i*4+3]/255,mk=M[i*4+3]/255*a,nz=noise*mk*gz();
     for(let c=0;c<3;c++){const lowT=TL[j+c],lowL=A3[j+c]>.02?LP[j+c]/A3[j+c]:lowT,ml=ML[j+c]*Math.min(1,A3[j+c]*2),
-      hiT=T.data[i*4+c]-lowT,hiL=L.data[i*4+c]-lowL;
-      T.data[i*4+c]=Math.max(0,Math.min(255,ml*lowL+(1-ml)*lowT+mk*hiL+(1-mk)*hiT))}}
+      hiT=T.data[i*4+c]-lowT,hiL=(L.data[i*4+c]-lowL)*soft;
+      T.data[i*4+c]=Math.max(0,Math.min(255,ml*lowL+(1-ml)*lowT+mk*hiL+(1-mk)*hiT+nz))}}
   ctx.putImageData(T,x0,y0);
 }
 
